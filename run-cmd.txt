@@ -1,0 +1,22 @@
+# Create & enter your env:
+
+conda create -n unicef_env python=3.9 -y
+conda activate unicef_env
+
+#Install everything from conda-forge:
+
+conda install -c conda-forge \
+  pandas \
+  plotnine \
+  geopandas \
+  cartopy \
+  matplotlib \
+  pycountry \
+  notebook \
+  pyyaml \
+  ipykernel \
+  quarto \
+  -y
+
+output:
+quarto render report.qmd

@@ -1,0 +1,303 @@
+---
+title: "Child Mortality: Trends, Inequality and Progress"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+Child mortality remains one of the most pressing global health issues. While many countries have made great progress, others still face high rates of under-5 deaths.
+This report explores global patterns, economic links, and regional disparities using UNICEF and World Bank data (1960-2022). It highlights countries that have seen rapid improvement and others where urgent action is still needed.
+
+Through four key visualizations, we will answer important questions:
+
+- Which countries have the highest burden of child deaths?
+- How is economic wealth linked to child survival?
+- What success stories can inspire global action?
+
+The findings offer a powerful reminder:  
+When societies prioritize children’s health and well-being, the future becomes brighter for all.
+
+## 1. Setup, Load & Aggregate Data
+In this section, I first imported the UNICEF under-five mortality dataset, along with supporting metadata that includes GDP per capita and hospital beds per 1,000 people.
+After importing, I performed data cleaning by filtering the under-five deaths dataset to include only the "Total" deaths across all sexes, ensuring consistency in the analysis.
+I also standardized the column names to make the datasets easier to work with.
+Next, I merged the two datasets based on country and year, so that each record had both mortality information and economic and healthcare indicators.
+I handled missing data by removing rows where GDP per capita, hospital beds, or under-five deaths were missing, to ensure that the graphs and analysis would be based on complete and reliable information.
+Finally, I aggregated the data where necessary, such as calculating average values across years for some graphs, in order to observe overall trends from 2012 to 2022.
+This setup and preparation phase was essential to create a clean, consistent, and meaningful dataset for the visualizations and insights presented in the next sections.
+```{python}
+import pandas as pd
+
+# Read UNICEF under-5 deaths data and metadata
+ind2 = pd.read_csv("unicef_indicator_2.csv")
+meta = pd.read_csv("unicef_metadata.csv")
+
+# Keep only Total-age under-5 deaths, then sum sexes per country-year
+mask = (ind2["indicator"] == "Under-five deaths") & (ind2["current_age"] == "Total")
+ind2 = ind2.loc[mask, ["country", "time_period", "obs_value"]]
+ind2.columns = ["Country", "Year", "Under-5 Deaths"]
+ind2 = ind2.groupby(["Country", "Year"], as_index=False).sum()
+
+# Prepare metadata (one record per country-year)
+meta = meta.rename(columns={
+    "country": "Country",
+    "year": "Year",
+    "GDP per capita (constant 2015 US$)": "GDP per Capita",
+    "Hospital beds (per 1,000 people)": "Hospital Beds"
+})
+meta = meta[["Country", "Year", "GDP per Capita", "Hospital Beds"]]
+
+# Merge aggregated deaths with metadata
+df = pd.merge(ind2, meta, on=["Country", "Year"], how="left")
+```
+
+## 2. World Map (Choropleth of Under-5 Deaths in 2022)
+This map shows where child mortality is still a major challenge around the world. Darker shades represent countries with higher numbers of under-five deaths. It’s clear that countries in Sub-Saharan Africa and parts of South Asia face the biggest struggles.
+By looking at the world this way, we can see that child mortality is not evenly spread—it is concentrated in specific regions where healthcare access and economic conditions remain weak.
+
+```{python}
+import geopandas as gpd
+import cartopy.io.shapereader as shpreader
+import matplotlib.pyplot as plt
+
+# Get Natural Earth shapefile
+shp_path = shpreader.natural_earth(
+    resolution='110m', category='cultural', name='admin_0_countries'
+)
+world = gpd.read_file(shp_path)
+
+# Merge geometry with aggregated 2022 data
+data2022 = df[df.Year == 2022]
+chor = world.merge(data2022, left_on='NAME_LONG', right_on='Country', how='left')
+
+# Plot choropleth
+fig, ax = plt.subplots(figsize=(10, 6))
+chor.plot(
+    column='Under-5 Deaths',
+    cmap='Reds',
+    linewidth=0.1,
+    edgecolor='gray',
+    legend=True,
+    legend_kwds={'label': "Under-5 Deaths (2022)"}
+, ax=ax)
+ax.set_axis_off()
+ax.set_title("Under-5 Deaths by Country (2022)")
+plt.tight_layout()
+plt.show()
+```
+
+## 3. Bar Chart: Top 10 Countries by Under-5 Deaths (2022)
+Here, we highlight the ten countries with the highest number of under-five deaths in 2022.
+The chart shows that just a few countries—like Nigeria, India, and Pakistan—account for a large share of the global total.
+Seeing these countries side by side reminds us that targeted action in just a handful of places could save millions of lives. It also shows where urgent support is most needed.
+```{python}
+import pandas as pd
+from plotnine import ggplot, aes, geom_col, coord_flip, labs
+
+#Pick top 10 and sort ascending for a horizontal bar plot 
+top10 = (
+    df[df.Year == 2022]
+    .nlargest(10, "Under-5 Deaths")
+    .sort_values("Under-5 Deaths", ascending=True)
+    .reset_index(drop=True)
+)
+
+#Turn Country into an ordered categorical with that exact ordering
+top10["Country"] = pd.Categorical(
+    top10["Country"],
+    categories=top10["Country"].tolist(),
+    ordered=True
+)
+
+# Plot using the already‐sorted factor
+(
+    ggplot(top10, aes(x="Country", y="Under-5 Deaths"))
+    + geom_col()
+    + coord_flip()
+    + labs(
+        x="Country",
+        y="Under-5 Deaths",
+        title="Top 10 Countries by Under-5 Deaths (2022)"
+    )
+)
+```
+
+## 4. Scatterplot + Regression: GDP per Capita vs Under-5 Deaths
+This scatterplot explores how a country's economic status relates to child mortality.
+We see a clear pattern: countries with higher GDP per capita generally have fewer child deaths.
+This doesn’t mean that money alone saves lives—but it does show that better resources often lead to better healthcare, nutrition, and living conditions. The downward trend line clearly highlights this connection between wealth and survival.
+
+```{python}
+from plotnine import (
+    ggplot, aes, geom_point, geom_text, geom_smooth,
+    scale_x_continuous, scale_y_continuous, labs, theme_minimal, theme, element_text
+)
+
+# Filter data for 2012-2022
+sub = df[(df.Year >= 2012) & (df.Year <= 2022)].dropna(subset=["GDP per Capita", "Under-5 Deaths", "Country"])
+sub = sub[(sub["GDP per Capita"] > 0) & (sub["Under-5 Deaths"] > 0)]
+
+# FInding the average
+sub_avg = sub.groupby("Country", as_index=False).agg({
+    "GDP per Capita": "mean",
+    "Under-5 Deaths": "mean"
+})
+
+# Label important countries
+important_countries = [
+    'India', 'Nigeria', 'United States', 'China', 'Pakistan', 'Indonesia',
+    'Somalia', 'Gambia', 'Kyrgyzstan', 'Sao Tome and Principe',
+    'Tonga', 'Nauru', 'Turks and Caicos Islands', 'Norway', 'Luxembourg', 'Monaco'
+]
+
+sub_avg["Label"] = sub_avg["Country"].apply(lambda x: x if x in important_countries else "")
+
+# Plot the Scatterplot
+(
+    ggplot(sub_avg, aes(x="GDP per Capita", y="Under-5 Deaths", label="Label"))
+    + geom_point(color="steelblue", size=3, alpha=0.7)
+    + geom_text(size=6, va='bottom', ha='left', nudge_y=1000)
+    + geom_smooth(method="lm", se=False, color="black")
+    + scale_x_continuous(labels=lambda l: ["{:,}".format(int(v)) for v in l])
+    + scale_y_continuous(labels=lambda l: ["{:,}".format(int(v)) for v in l])
+    + labs(
+        title="Do Wealthier Countries Have Lower Child Mortality Rates? (2012–2022)",
+        x="Average GDP per Capita (USD)",
+        y="Average Under-5 Deaths"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(14, 6),
+        plot_title=element_text(size=16, weight='bold', ha='center'),  # 📢 Center-align title
+        axis_title=element_text(size=12),
+        axis_text=element_text(size=10)
+    )
+)
+
+```
+
+## 5. Time Series: Under-5 Deaths in India Over Time
+India’s story is one of hope and steady progress.
+Over the last 30 years, India has managed to sharply reduce under-five deaths through better healthcare, education, and economic growth.
+This line chart shows the decline year by year, proving that when countries invest in children's health, real change is possible. It offers a powerful example for other nations still facing high child mortality rates.
+```{python}
+from plotnine import ggplot, aes, geom_line, geom_point, labs
+
+#Filter country india by year from the dataset
+india = df[df["Country"] == "India"].sort_values("Year")
+
+#Plot the graph
+(
+    ggplot(india, aes(x="Year", y="Under-5 Deaths"))
+    + geom_line()
+    + geom_point()
+    + labs(
+        title="Under-5 Deaths in India Over Time",
+        x="Year",
+        y="Deaths"
+    )
+)
+```
+
+# 6. Continent-Level View: Healthcare Access vs Child Mortality (2012–2022)
+This grouped bar chart compares the average number of hospital beds and the total number of under-5 deaths across different continents for the years 2012–2022.
+We observe that continents with better healthcare infrastructure — indicated by a higher average number of hospital beds, such as Europe — tend to have lower child mortality rates. In contrast, regions like Africa and parts of Asia show higher under-5 deaths, likely due to more limited access to healthcare facilities.
+This visual clearly highlights the critical role that healthcare availability plays in improving child survival rates globally.
+```{python}
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import matplotlib.ticker as mticker 
+
+# Create continent mapping manually
+continent_mapping = {
+    'India': 'Asia',
+    'Nigeria': 'Africa',
+    'United States': 'Americas',
+    'China': 'Asia',
+    'Pakistan': 'Asia',
+    'Indonesia': 'Asia',
+    'Somalia': 'Africa',
+    'Gambia': 'Africa',
+    'Kyrgyzstan': 'Asia',
+    'Sao Tome and Principe': 'Africa',
+    'Tonga': 'Oceania',
+    'Nauru': 'Oceania',
+    'Turks and Caicos Islands': 'Americas',
+    'Norway': 'Europe',
+    'Luxembourg': 'Europe',
+    'Monaco': 'Europe'
+}
+
+# Map continent
+df["Continent"] = df["Country"].map(continent_mapping)
+
+# Filter data
+sub_continent = df[(df.Year >= 2012) & (df.Year <= 2022)].dropna(subset=["GDP per Capita", "Under-5 Deaths", "Hospital Beds", "Continent"])
+
+# Group and aggregate
+continent_avg = sub_continent.groupby("Continent", as_index=False).agg({
+    "Hospital Beds": "mean",
+    "Under-5 Deaths": "sum"
+})
+
+# Set position for bars
+x = np.arange(len(continent_avg["Continent"]))
+width = 0.35 
+
+# Create plot
+fig, ax1 = plt.subplots(figsize=(12, 6))
+# Bar 1 - Under-5 Deaths
+bar1 = ax1.bar(x - width/2, continent_avg["Under-5 Deaths"], width, color='firebrick', label='Under-5 Deaths')
+ax1.set_ylabel('Under-5 Deaths', color='black')  
+ax1.tick_params(axis='y', labelcolor='black')  
+ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+# Create second y-axis
+ax2 = ax1.twinx()
+# Bar 2 - Avg Hospital Beds
+bar2 = ax2.bar(x + width/2, continent_avg["Hospital Beds"], width, color='royalblue', label='Avg Hospital Beds')
+ax2.set_ylabel('Avg. Hospital Beds', color='royalblue')
+ax2.tick_params(axis='y', labelcolor='royalblue')
+
+# Title and x-axis
+ax1.set_title('Continent-Level View: Higher Healthcare Access Linked to Lower Child Mortality (2012–2022)')
+ax1.set_xlabel('Continents')
+ax1.set_xticks(x)
+ax1.set_xticklabels(continent_avg["Continent"])
+
+# Add legends
+fig.legend(loc='upper right', bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+
+plt.tight_layout()
+plt.show()
+```
+
+## Conclusion
+
+The story of child mortality is one of both heartbreaking loss and hopeful progress.
+
+From my analysis, I see that a relatively small number of countries bear the largest burden of under-five deaths—many concentrated in regions with lower economic development.  
+The scatterplot between GDP per capita and child mortality clearly shows that **wealthier countries have fewer child deaths**, mainly due to better healthcare systems, improved nutrition, and wider access to education.
+
+At the same time, individual country success stories—like India’s steady decline in under-five deaths—prove that progress is possible even in low- and middle-income nations.  
+With strong leadership, targeted investment, and community-level health programs, many lives can be saved.
+
+**Key Takeaways:**
+
+- Investment in healthcare infrastructure is critical.
+
+- Reducing poverty has a direct impact on child survival.
+
+- Global efforts must continue to focus on the regions most at risk.
+
+Ultimately, every child deserves an equal chance at a healthy life, no matter where they are born.  
+By learning from the data and acting on it, we can build a world where child mortality is no longer a tragedy we accept, but a challenge we overcome.
+
+_“The true measure of any society can be found in how it treats its most vulnerable members.”_  
+— Mahatma Gandhi
